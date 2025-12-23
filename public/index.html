@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ashima & Anjali's Word Game</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <h1>Ashima & Anjali's Word Game</h1>
+
+        <!-- Welcome Screen -->
+        <div id="welcomeScreen" class="screen">
+            <div class="card welcome-card">
+                <div class="sisters-photo-container">
+                    <img src="images/Anjali&Ashima.jpeg" alt="Ashima & Anjali" class="sisters-photo">
+                </div>
+                <div class="sisters-header">
+                    <span class="player-emoji">🌸</span>
+                    <span class="sisters-title">Sister vs Sister!</span>
+                    <span class="player-emoji">🦋</span>
+                </div>
+                <h2>Welcome!</h2>
+                <p>Pick a secret word for your sister to guess. Take turns guessing letters until someone wins!</p>
+                <p style="text-align: center; margin-bottom: 25px;">Who's playing?</p>
+                <div class="player-selection">
+                    <div class="player-card" id="selectAshima">
+                        <img src="images/Ashima.jpeg" alt="Ashima" class="player-photo">
+                        <span class="player-name ashima-name">🌸 Ashima</span>
+                    </div>
+                    <div class="player-card" id="selectAnjali">
+                        <img src="images/Anjali.jpeg" alt="Anjali" class="player-photo">
+                        <span class="player-name anjali-name">🦋 Anjali</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Waiting Screen -->
+        <div id="waitingScreen" class="screen hidden">
+            <div class="card">
+                <h2 id="waitingTitle">Waiting for your sister...</h2>
+                <div class="spinner"></div>
+                <p id="waitingMessage">Tell your sister to join the game!</p>
+            </div>
+        </div>
+
+        <!-- Setup Screen -->
+        <div id="setupScreen" class="screen hidden">
+            <div class="card">
+                <h2>Pick Your Secret Word!</h2>
+                <p id="setupPrompt">Choose a word for your sister to guess.</p>
+                <form id="setupForm">
+                    <div class="form-group">
+                        <label for="secretWord">Your Secret Word:</label>
+                        <input type="text" id="secretWord" placeholder="Type a word here..." required autocomplete="off">
+                        <small>Pick any English word with 3 or more letters!</small>
+                    </div>
+                    <div id="setupError" class="error hidden"></div>
+                    <button type="submit" class="btn primary">I'm Ready!</button>
+                </form>
+                <div id="waitingForOpponent" class="hidden">
+                    <div class="spinner small"></div>
+                    <p id="waitingForSister">Waiting for your sister to pick her word...</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Game Screen -->
+        <div id="gameScreen" class="screen hidden">
+            <div class="game-layout">
+                <!-- Chat/Referee Messages -->
+                <div class="messages-panel">
+                    <h3>Game Updates</h3>
+                    <div id="messagesContainer" class="messages-container"></div>
+                </div>
+
+                <!-- Game Area -->
+                <div class="game-panel">
+                    <div class="game-info">
+                        <div class="player-info your-info">
+                            <h3><span id="yourEmoji">🌸</span> <span id="yourName">You</span></h3>
+                            <div class="guess-status">
+                                <p>Guessing: <span id="opponentWordMasked" class="masked-word">_ _ _ _</span></p>
+                                <p>Guesses left: <span id="yourGuessesLeft">6</span></p>
+                                <p>Letters tried: <span id="yourGuessedLetters">-</span></p>
+                            </div>
+                        </div>
+
+                        <div class="vs">VS</div>
+
+                        <div class="player-info opponent-info">
+                            <h3><span id="opponentEmoji">🦋</span> <span id="opponentName">Sister</span></h3>
+                            <div class="guess-status">
+                                <p>Guessing your word: <span id="yourWordMasked" class="masked-word">_ _ _ _</span></p>
+                                <p>Guesses left: <span id="opponentGuessesLeft">6</span></p>
+                                <p>Letters tried: <span id="opponentGuessedLetters">-</span></p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div id="turnIndicator" class="turn-indicator">Waiting...</div>
+
+                    <div id="guessSection" class="guess-section">
+                        <div class="keyboard">
+                            <!-- Letters will be added by JavaScript -->
+                        </div>
+                        <div id="guessError" class="error hidden"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Game Over Screen -->
+        <div id="gameOverScreen" class="screen hidden">
+            <div class="card">
+                <h2 id="gameOverTitle">Game Over!</h2>
+                <p id="gameOverMessage"></p>
+                <div id="finalWords" class="final-words"></div>
+                <button id="playAgainBtn" class="btn primary">Play Again!</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
