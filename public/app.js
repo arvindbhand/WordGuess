@@ -2,12 +2,19 @@ const socket = io();
 
 let myPlayerKey = null;
 let currentRoom = null;
-let selectedPlayer = null; // 'Ashima' or 'Anjali'
+let selectedPlayer = null;
 
 // Player profiles
 const players = {
     Ashima: { emoji: '🌸', color: '#FF69B4' },
     Anjali: { emoji: '🦋', color: '#9370DB' }
+};
+
+// Scrabble letter values
+const LETTER_VALUES = {
+    a: 1, b: 3, c: 3, d: 2, e: 1, f: 4, g: 2, h: 4, i: 1, j: 8, k: 5,
+    l: 1, m: 3, n: 1, o: 1, p: 3, q: 10, r: 1, s: 1, t: 1, u: 1, v: 4,
+    w: 4, x: 8, y: 4, z: 10
 };
 
 // DOM Elements
@@ -16,6 +23,8 @@ const waitingScreen = document.getElementById('waitingScreen');
 const setupScreen = document.getElementById('setupScreen');
 const gameScreen = document.getElementById('gameScreen');
 const gameOverScreen = document.getElementById('gameOverScreen');
+const rulesModal = document.getElementById('rulesModal');
+const wordGuessModal = document.getElementById('wordGuessModal');
 
 const selectAshimaBtn = document.getElementById('selectAshima');
 const selectAnjaliBtn = document.getElementById('selectAnjali');
@@ -25,6 +34,9 @@ const waitingForOpponent = document.getElementById('waitingForOpponent');
 const messagesContainer = document.getElementById('messagesContainer');
 const guessError = document.getElementById('guessError');
 const playAgainBtn = document.getElementById('playAgainBtn');
+const iKnowBtn = document.getElementById('iKnowBtn');
+const rulesOkBtn = document.getElementById('rulesOkBtn');
+const dontShowAgain = document.getElementById('dontShowAgain');
 
 // Screens management
 function showScreen(screen) {
@@ -33,6 +45,21 @@ function showScreen(screen) {
     });
     screen.classList.remove('hidden');
 }
+
+// Show rules modal on load (if not dismissed before)
+function checkShowRulesModal() {
+    const hideRules = localStorage.getItem('hideRulesV2');
+    if (!hideRules) {
+        rulesModal.classList.remove('hidden');
+    }
+}
+
+rulesOkBtn.addEventListener('click', () => {
+    if (dontShowAgain.checked) {
+        localStorage.setItem('hideRulesV2', 'true');
+    }
+    rulesModal.classList.add('hidden');
+});
 
 // Player selection
 selectAshimaBtn.addEventListener('click', () => {
@@ -45,17 +72,26 @@ selectAnjaliBtn.addEventListener('click', () => {
     socket.emit('joinGame', { playerName: 'Anjali' });
 });
 
-// Setup form submission
+// Setup form submission - 5 words
 setupForm.addEventListener('submit', (e) => {
     e.preventDefault();
-    const word = document.getElementById('secretWord').value.trim();
+    const words = [
+        document.getElementById('word1').value.trim(),
+        document.getElementById('word2').value.trim(),
+        document.getElementById('word3').value.trim(),
+        document.getElementById('word4').value.trim(),
+        document.getElementById('word5').value.trim()
+    ];
 
-    if (!word) {
-        showSetupError('Please type a secret word!');
-        return;
+    // Basic client-side validation
+    for (let i = 0; i < words.length; i++) {
+        if (!words[i]) {
+            showSetupError(`Please enter word ${i + 1}!`);
+            return;
+        }
     }
 
-    socket.emit('submitSetup', { name: selectedPlayer, word });
+    socket.emit('submitWords', { words });
 });
 
 // Play again
@@ -63,6 +99,36 @@ playAgainBtn.addEventListener('click', () => {
     socket.emit('resetGame');
     showScreen(welcomeScreen);
     selectedPlayer = null;
+});
+
+// "I Know This Word!" button
+iKnowBtn.addEventListener('click', () => {
+    wordGuessModal.classList.remove('hidden');
+    document.getElementById('wordGuessInput').value = '';
+    document.getElementById('wordGuessInput').focus();
+});
+
+document.getElementById('cancelGuessBtn').addEventListener('click', () => {
+    wordGuessModal.classList.add('hidden');
+});
+
+document.getElementById('submitGuessBtn').addEventListener('click', () => {
+    const word = document.getElementById('wordGuessInput').value.trim();
+    if (word) {
+        socket.emit('guessWord', { word });
+        wordGuessModal.classList.add('hidden');
+    }
+});
+
+// Allow Enter key to submit word guess
+document.getElementById('wordGuessInput').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+        const word = e.target.value.trim();
+        if (word) {
+            socket.emit('guessWord', { word });
+            wordGuessModal.classList.add('hidden');
+        }
+    }
 });
 
 // Socket event handlers
@@ -107,6 +173,39 @@ socket.on('gameReset', () => {
     selectedPlayer = null;
 });
 
+// Handle wrong word guess - show modal with details
+socket.on('wrongWordGuess', (data) => {
+    showWrongGuessModal(data.guessed, data.actual, data.penalty);
+});
+
+function showWrongGuessModal(guessed, actual, penalty) {
+    const modal = document.getElementById('wrongGuessModal');
+    document.getElementById('wrongGuessWord').textContent = guessed.toUpperCase();
+    document.getElementById('actualWord').textContent = actual.toUpperCase();
+    document.getElementById('penaltyPoints').textContent = penalty;
+    modal.classList.remove('hidden');
+}
+
+document.getElementById('wrongGuessOkBtn').addEventListener('click', () => {
+    document.getElementById('wrongGuessModal').classList.add('hidden');
+});
+
+// Handle correct word guess - show celebration modal
+socket.on('correctWordGuess', (data) => {
+    showCorrectGuessModal(data.word, data.points);
+});
+
+function showCorrectGuessModal(word, points) {
+    const modal = document.getElementById('correctGuessModal');
+    document.getElementById('correctWord').textContent = word.toUpperCase();
+    document.getElementById('earnedPoints').textContent = points;
+    modal.classList.remove('hidden');
+}
+
+document.getElementById('correctGuessOkBtn').addEventListener('click', () => {
+    document.getElementById('correctGuessModal').classList.add('hidden');
+});
+
 function showSetupError(message) {
     setupError.textContent = message;
     setupError.classList.remove('hidden');
@@ -124,15 +223,47 @@ function showGuessError(message) {
 }
 
 function getMaskedWord(word, guessedLetters) {
+    if (!word) return '_ _ _ _';
     return word.split('').map(letter =>
         guessedLetters.includes(letter.toLowerCase()) ? letter.toUpperCase() : '_'
     ).join(' ');
+}
+
+// Calculate running score for current word
+function calculateRunningScore(word, guessedLetters, wrongGuesses) {
+    if (!word) return { earned: 0, potential: 0, penalty: 0 };
+
+    let earned = 0;
+    let potential = 0;
+
+    // Calculate earned points (letters correctly guessed)
+    const uniqueLetters = [...new Set(word.toLowerCase().split(''))];
+    uniqueLetters.forEach(letter => {
+        const value = LETTER_VALUES[letter] || 0;
+        if (guessedLetters.includes(letter)) {
+            earned += value * 2; // 2x for correct guesses
+        } else {
+            potential += value * 2; // potential points still available
+        }
+    });
+
+    return {
+        earned: earned,
+        potential: potential,
+        penalty: wrongGuesses
+    };
 }
 
 function getPlayerEmoji(name) {
     if (name === 'Ashima') return '🌸';
     if (name === 'Anjali') return '🦋';
     return '⭐';
+}
+
+function getPlayerAvatar(name) {
+    if (name === 'Ashima') return 'images/Ashima.jpeg';
+    if (name === 'Anjali') return 'images/Anjali.jpeg';
+    return '';
 }
 
 function getSisterName(name) {
@@ -155,7 +286,6 @@ function updateUI() {
     switch (phase) {
         case 'waiting':
             showScreen(waitingScreen);
-            // Update waiting message with sister's name
             const sisterName = getSisterName(selectedPlayer);
             document.getElementById('waitingTitle').textContent = `Waiting for ${sisterName}...`;
             document.getElementById('waitingMessage').textContent = `Tell ${sisterName} to click her name to join!`;
@@ -164,13 +294,13 @@ function updateUI() {
         case 'setup':
             showScreen(setupScreen);
             document.getElementById('setupPrompt').textContent =
-                `${selectedPlayer}, pick a word for ${getSisterName(selectedPlayer)} to guess!`;
+                `${selectedPlayer}, pick 5 words for ${getSisterName(selectedPlayer)} to guess!`;
 
-            if (myPlayer.name && myPlayer.word) {
+            if (myPlayer.words && myPlayer.words.length === 5) {
                 setupForm.classList.add('hidden');
                 waitingForOpponent.classList.remove('hidden');
                 document.getElementById('waitingForSister').textContent =
-                    `Waiting for ${getSisterName(selectedPlayer)} to pick her word...`;
+                    `Waiting for ${getSisterName(selectedPlayer)} to pick her words...`;
             } else {
                 setupForm.classList.remove('hidden');
                 waitingForOpponent.classList.add('hidden');
@@ -197,7 +327,6 @@ function updateMessages() {
         const msgDiv = document.createElement('div');
         msgDiv.className = 'message';
 
-        // Add emoji for player messages
         let fromText = msg.from;
         if (msg.from === 'Ashima') fromText = '🌸 Ashima';
         else if (msg.from === 'Anjali') fromText = '🦋 Anjali';
@@ -216,25 +345,60 @@ function updateGameUI() {
     const opponentKey = myPlayerKey === 'player1' ? 'player2' : 'player1';
     const opponent = currentRoom.players[opponentKey];
 
-    // Update player names with emojis
+    // Update player names with emojis and avatars
     document.getElementById('yourName').textContent = myPlayer.name;
     document.getElementById('opponentName').textContent = opponent.name;
     document.getElementById('yourEmoji').textContent = getPlayerEmoji(myPlayer.name);
     document.getElementById('opponentEmoji').textContent = getPlayerEmoji(opponent.name);
+    document.getElementById('yourAvatar').src = getPlayerAvatar(myPlayer.name);
+    document.getElementById('opponentAvatar').src = getPlayerAvatar(opponent.name);
+
+    // Update scoreboard
+    document.getElementById('yourScoreEmoji').textContent = getPlayerEmoji(myPlayer.name);
+    document.getElementById('yourScoreName').textContent = myPlayer.name;
+    document.getElementById('yourScore').textContent = myPlayer.score;
+
+    const myTurnsLeft = currentRoom.maxTurns - myPlayer.turnsTaken;
+    document.getElementById('yourTurnsLeft').textContent = myTurnsLeft;
+
+    document.getElementById('opponentScoreEmoji').textContent = getPlayerEmoji(opponent.name);
+    document.getElementById('opponentScoreName').textContent = opponent.name;
+    document.getElementById('opponentScore').textContent = opponent.score;
+
+    const oppTurnsLeft = currentRoom.maxTurns - opponent.turnsTaken;
+    document.getElementById('opponentTurnsLeft').textContent = oppTurnsLeft;
 
     // Update your guessing progress (you're guessing opponent's word)
-    document.getElementById('opponentWordMasked').textContent = getMaskedWord(opponent.word, myPlayer.guessedLetters);
-    document.getElementById('yourGuessesLeft').textContent = myPlayer.guessesRemaining;
+    document.getElementById('opponentWordMasked').textContent =
+        getMaskedWord(opponent.currentWord, myPlayer.guessedLetters);
+    document.getElementById('opponentWordsLeft').textContent = opponent.wordsRemaining.length;
     document.getElementById('yourGuessedLetters').textContent = myPlayer.guessedLetters.length > 0
         ? myPlayer.guessedLetters.map(l => l.toUpperCase()).join(', ')
         : '-';
 
+    // Calculate and show running score for your current word guess
+    const myRunningScore = calculateRunningScore(opponent.currentWord, myPlayer.guessedLetters, myPlayer.wrongGuesses);
+    const runningScoreEl = document.getElementById('yourRunningScore');
+    if (runningScoreEl) {
+        const netScore = myRunningScore.earned - myRunningScore.penalty;
+        runningScoreEl.innerHTML = `<span class="earned">+${myRunningScore.earned}</span> <span class="penalty">-${myRunningScore.penalty}</span> = <span class="net">${netScore}</span> pts`;
+    }
+
     // Update opponent's guessing progress (they're guessing your word)
-    document.getElementById('yourWordMasked').textContent = getMaskedWord(myPlayer.word, opponent.guessedLetters);
-    document.getElementById('opponentGuessesLeft').textContent = opponent.guessesRemaining;
+    document.getElementById('yourWordMasked').textContent =
+        getMaskedWord(myPlayer.currentWord, opponent.guessedLetters);
+    document.getElementById('yourWordsLeft').textContent = myPlayer.wordsRemaining.length;
     document.getElementById('opponentGuessedLetters').textContent = opponent.guessedLetters.length > 0
         ? opponent.guessedLetters.map(l => l.toUpperCase()).join(', ')
         : '-';
+
+    // Calculate and show running score for opponent's current word guess
+    const oppRunningScore = calculateRunningScore(myPlayer.currentWord, opponent.guessedLetters, opponent.wrongGuesses);
+    const oppRunningScoreEl = document.getElementById('opponentRunningScore');
+    if (oppRunningScoreEl) {
+        const netScore = oppRunningScore.earned - oppRunningScore.penalty;
+        oppRunningScoreEl.innerHTML = `<span class="earned">+${oppRunningScore.earned}</span> <span class="penalty">-${oppRunningScore.penalty}</span> = <span class="net">${netScore}</span> pts`;
+    }
 
     // Update turn indicator
     const turnIndicator = document.getElementById('turnIndicator');
@@ -243,13 +407,15 @@ function updateGameUI() {
     if (isMyTurn) {
         turnIndicator.textContent = `${getPlayerEmoji(myPlayer.name)} Your turn, ${myPlayer.name}! Pick a letter!`;
         turnIndicator.className = 'turn-indicator your-turn';
+        iKnowBtn.classList.remove('hidden');
     } else {
         turnIndicator.textContent = `${getPlayerEmoji(opponent.name)} ${opponent.name} is guessing...`;
         turnIndicator.className = 'turn-indicator opponent-turn';
+        iKnowBtn.classList.add('hidden');
     }
 
     // Update keyboard
-    updateKeyboard(isMyTurn, myPlayer.guessedLetters, opponent.word);
+    updateKeyboard(isMyTurn, myPlayer.guessedLetters, opponent.currentWord);
 }
 
 function updateKeyboard(isMyTurn, guessedLetters, opponentWord) {
@@ -261,11 +427,14 @@ function updateKeyboard(isMyTurn, guessedLetters, opponentWord) {
     letters.forEach(letter => {
         const btn = document.createElement('button');
         btn.className = 'key';
-        btn.textContent = letter.toUpperCase();
+
+        // Show letter with its point value
+        const value = LETTER_VALUES[letter];
+        btn.innerHTML = `<span class="key-letter">${letter.toUpperCase()}</span><span class="key-value">${value}</span>`;
 
         if (guessedLetters.includes(letter)) {
             btn.classList.add('used');
-            if (opponentWord.includes(letter)) {
+            if (opponentWord && opponentWord.includes(letter)) {
                 btn.classList.add('correct');
             } else {
                 btn.classList.add('wrong');
@@ -357,40 +526,56 @@ function updateGameOverUI() {
 
     const title = document.getElementById('gameOverTitle');
     const message = document.getElementById('gameOverMessage');
+    const finalScores = document.getElementById('finalScores');
     const finalWords = document.getElementById('finalWords');
 
     const myEmoji = getPlayerEmoji(myPlayer.name);
     const oppEmoji = getPlayerEmoji(opponent.name);
 
-    // Determine winner name for celebration
-    let winnerName = null;
-    let isTie = false;
-
-    if (myPlayer.won && opponent.won) {
-        title.innerHTML = "<span class='winner-title tie'>It's a Tie! 🎀</span>";
-        message.textContent = "You both guessed the words! Great job, sisters!";
-        isTie = true;
-    } else if (myPlayer.won) {
-        title.innerHTML = `<span class='winner-title flash-winner'>${myEmoji} ${myPlayer.name} Wins! 🎉</span>`;
-        message.textContent = `Congratulations ${myPlayer.name}! You guessed ${opponent.name}'s word!`;
-        winnerName = myPlayer.name;
-    } else if (opponent.won) {
-        title.innerHTML = `<span class='winner-title flash-winner'>${oppEmoji} ${opponent.name} Wins! 🎉</span>`;
-        message.textContent = `${opponent.name} guessed your word first! Better luck next time!`;
-        winnerName = opponent.name;
-    } else {
-        title.textContent = "Time's Up! 😊";
-        message.textContent = "Neither of you guessed the word. Try again!";
-    }
-
-    finalWords.innerHTML = `
-        <div class="word-reveal">
-            <p><strong>${myEmoji} ${myPlayer.name}'s word:</strong> ${myPlayer.word.toUpperCase()}</p>
-            <p><strong>${oppEmoji} ${opponent.name}'s word:</strong> ${opponent.word.toUpperCase()}</p>
+    // Show final scores
+    finalScores.innerHTML = `
+        <div class="final-score-display">
+            <div class="final-score-item ${myPlayer.score > opponent.score ? 'winner' : ''}">
+                ${myEmoji} ${myPlayer.name}: <strong>${myPlayer.score}</strong> points
+            </div>
+            <div class="final-score-item ${opponent.score > myPlayer.score ? 'winner' : ''}">
+                ${oppEmoji} ${opponent.name}: <strong>${opponent.score}</strong> points
+            </div>
         </div>
     `;
 
-    // Launch celebration effects if someone won
+    // Determine winner
+    let winnerName = null;
+    let isTie = false;
+
+    if (myPlayer.score === opponent.score) {
+        title.innerHTML = "<span class='winner-title tie'>It's a Tie!</span>";
+        message.textContent = `Both scored ${myPlayer.score} points! Great game, sisters!`;
+        isTie = true;
+    } else if (myPlayer.score > opponent.score) {
+        title.innerHTML = `<span class='winner-title flash-winner'>${myEmoji} ${myPlayer.name} Wins!</span>`;
+        message.textContent = `Congratulations ${myPlayer.name}! You scored ${myPlayer.score} points!`;
+        winnerName = myPlayer.name;
+    } else {
+        title.innerHTML = `<span class='winner-title flash-winner'>${oppEmoji} ${opponent.name} Wins!</span>`;
+        message.textContent = `${opponent.name} wins with ${opponent.score} points!`;
+        winnerName = opponent.name;
+    }
+
+    // Show all words
+    const myWordsUsed = myPlayer.words.filter(w => !myPlayer.wordsRemaining.includes(w));
+    const oppWordsUsed = opponent.words.filter(w => !opponent.wordsRemaining.includes(w));
+
+    finalWords.innerHTML = `
+        <div class="word-reveal">
+            <p><strong>${myEmoji} ${myPlayer.name}'s words:</strong></p>
+            <p class="words-list">${myPlayer.words.map(w => w.toUpperCase()).join(', ')}</p>
+            <p><strong>${oppEmoji} ${opponent.name}'s words:</strong></p>
+            <p class="words-list">${opponent.words.map(w => w.toUpperCase()).join(', ')}</p>
+        </div>
+    `;
+
+    // Launch celebration effects
     if (winnerName || isTie) {
         launchFireworks();
         createConfetti();
@@ -405,8 +590,16 @@ document.addEventListener('keydown', (e) => {
     if (!currentRoom || currentRoom.phase !== 'playing') return;
     if (currentRoom.currentTurn !== myPlayerKey) return;
 
+    // Don't capture if word guess modal is open
+    if (!wordGuessModal.classList.contains('hidden')) return;
+
     const letter = e.key.toLowerCase();
     if (/^[a-z]$/.test(letter)) {
         socket.emit('guess', { letter });
     }
+});
+
+// Show rules modal on page load
+document.addEventListener('DOMContentLoaded', () => {
+    checkShowRulesModal();
 });

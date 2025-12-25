@@ -3,12 +3,62 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Ashima & Anjali's Word Game</title>
+    <title>Ashima & Anjali's Word Game v2</title>
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
     <div class="container">
-        <h1>Ashima & Anjali's Word Game</h1>
+        <h1>Ashima & Anjali's Word Game <span class="version-badge">v2</span></h1>
+
+        <!-- Rules Modal -->
+        <div id="rulesModal" class="modal hidden">
+            <div class="modal-content">
+                <h2>Game Rules - Version 2</h2>
+                <div class="rules-content">
+                    <h3>Setup</h3>
+                    <ul>
+                        <li>Each player picks <strong>5 secret words</strong> for their sister to guess</li>
+                        <li>All words must be valid English words (3+ letters)</li>
+                    </ul>
+
+                    <h3>Gameplay</h3>
+                    <ul>
+                        <li>Take turns guessing letters to reveal your sister's word</li>
+                        <li>The referee randomly picks which word you'll guess</li>
+                        <li>When you guess a word, a new one is randomly selected</li>
+                        <li>Each player gets <strong>10 turns maximum</strong></li>
+                    </ul>
+
+                    <h3>Scoring (Scrabble Points)</h3>
+                    <ul>
+                        <li>Letters have Scrabble values (A=1, B=3, Q=10, Z=10, etc.)</li>
+                        <li><strong>Correct word:</strong> 2x the word's letter value, minus 1 per wrong guess</li>
+                        <li><strong>Example:</strong> "CAT" (C=3, A=1, T=1 = 5 points) gives you 10 points minus wrong guesses</li>
+                    </ul>
+
+                    <h3>"I Know This Word!" Button</h3>
+                    <ul>
+                        <li>Click this to guess the entire word at once</li>
+                        <li><strong>If correct:</strong> You get normal scoring</li>
+                        <li><strong>If wrong:</strong> -2x the word's value penalty, and the word is skipped!</li>
+                    </ul>
+
+                    <h3>Game Ends When</h3>
+                    <ul>
+                        <li>Both players have taken 10 turns each, OR</li>
+                        <li>One player guesses all 5 words (opponent gets equal turns to catch up)</li>
+                        <li><strong>Highest score wins!</strong></li>
+                    </ul>
+                </div>
+                <div class="modal-footer">
+                    <label class="dont-show-again">
+                        <input type="checkbox" id="dontShowAgain">
+                        Don't show this again
+                    </label>
+                    <button id="rulesOkBtn" class="btn primary">OK, Let's Play!</button>
+                </div>
+            </div>
+        </div>
 
         <!-- Welcome Screen -->
         <div id="welcomeScreen" class="screen">
@@ -22,7 +72,7 @@
                     <span class="player-emoji">🦋</span>
                 </div>
                 <h2>Welcome!</h2>
-                <p>Pick a secret word for your sister to guess. Take turns guessing letters until someone wins!</p>
+                <p>Pick 5 secret words for your sister to guess. Take turns guessing letters and score points!</p>
                 <p style="text-align: center; margin-bottom: 25px;">Who's playing?</p>
                 <div class="player-selection">
                     <div class="player-card" id="selectAshima">
@@ -46,23 +96,41 @@
             </div>
         </div>
 
-        <!-- Setup Screen -->
+        <!-- Setup Screen - 5 Words -->
         <div id="setupScreen" class="screen hidden">
-            <div class="card">
-                <h2>Pick Your Secret Word!</h2>
-                <p id="setupPrompt">Choose a word for your sister to guess.</p>
+            <div class="card setup-card">
+                <h2>Pick Your 5 Secret Words!</h2>
+                <p id="setupPrompt">Choose 5 words for your sister to guess.</p>
                 <form id="setupForm">
-                    <div class="form-group">
-                        <label for="secretWord">Your Secret Word:</label>
-                        <input type="text" id="secretWord" placeholder="Type a word here..." required autocomplete="off">
-                        <small>Pick any English word with 3 or more letters!</small>
+                    <div class="words-grid">
+                        <div class="form-group">
+                            <label for="word1">Word 1:</label>
+                            <input type="text" id="word1" placeholder="Enter word..." required autocomplete="off">
+                        </div>
+                        <div class="form-group">
+                            <label for="word2">Word 2:</label>
+                            <input type="text" id="word2" placeholder="Enter word..." required autocomplete="off">
+                        </div>
+                        <div class="form-group">
+                            <label for="word3">Word 3:</label>
+                            <input type="text" id="word3" placeholder="Enter word..." required autocomplete="off">
+                        </div>
+                        <div class="form-group">
+                            <label for="word4">Word 4:</label>
+                            <input type="text" id="word4" placeholder="Enter word..." required autocomplete="off">
+                        </div>
+                        <div class="form-group">
+                            <label for="word5">Word 5:</label>
+                            <input type="text" id="word5" placeholder="Enter word..." required autocomplete="off">
+                        </div>
                     </div>
+                    <small>All words must be valid English words with 3+ letters. No duplicates!</small>
                     <div id="setupError" class="error hidden"></div>
-                    <button type="submit" class="btn primary">I'm Ready!</button>
+                    <button type="submit" class="btn primary">Submit My Words!</button>
                 </form>
                 <div id="waitingForOpponent" class="hidden">
                     <div class="spinner small"></div>
-                    <p id="waitingForSister">Waiting for your sister to pick her word...</p>
+                    <p id="waitingForSister">Waiting for your sister to pick her words...</p>
                 </div>
             </div>
         </div>
@@ -78,24 +146,47 @@
 
                 <!-- Game Area -->
                 <div class="game-panel">
+                    <div class="scoreboard">
+                        <div class="score-item your-score">
+                            <span id="yourScoreEmoji">🌸</span>
+                            <span id="yourScoreName">You</span>:
+                            <span id="yourScore" class="score-value">0</span> pts
+                            <span class="turns-info">(<span id="yourTurnsLeft">10</span> turns left)</span>
+                        </div>
+                        <div class="score-item opponent-score">
+                            <span id="opponentScoreEmoji">🦋</span>
+                            <span id="opponentScoreName">Sister</span>:
+                            <span id="opponentScore" class="score-value">0</span> pts
+                            <span class="turns-info">(<span id="opponentTurnsLeft">10</span> turns left)</span>
+                        </div>
+                    </div>
+
                     <div class="game-info">
                         <div class="player-info your-info">
-                            <h3><span id="yourEmoji">🌸</span> <span id="yourName">You</span></h3>
+                            <div class="player-header">
+                                <img id="yourAvatar" src="images/Ashima.jpeg" alt="" class="game-avatar">
+                                <h3><span id="yourEmoji">🌸</span> <span id="yourName">You</span></h3>
+                            </div>
                             <div class="guess-status">
                                 <p>Guessing: <span id="opponentWordMasked" class="masked-word">_ _ _ _</span></p>
-                                <p>Guesses left: <span id="yourGuessesLeft">6</span></p>
+                                <p>Words left: <span id="opponentWordsLeft">5</span></p>
                                 <p>Letters tried: <span id="yourGuessedLetters">-</span></p>
+                                <p class="running-score">This word: <span id="yourRunningScore">+0 -0 = 0 pts</span></p>
                             </div>
                         </div>
 
                         <div class="vs">VS</div>
 
                         <div class="player-info opponent-info">
-                            <h3><span id="opponentEmoji">🦋</span> <span id="opponentName">Sister</span></h3>
+                            <div class="player-header">
+                                <img id="opponentAvatar" src="images/Anjali.jpeg" alt="" class="game-avatar">
+                                <h3><span id="opponentEmoji">🦋</span> <span id="opponentName">Sister</span></h3>
+                            </div>
                             <div class="guess-status">
-                                <p>Guessing your word: <span id="yourWordMasked" class="masked-word">_ _ _ _</span></p>
-                                <p>Guesses left: <span id="opponentGuessesLeft">6</span></p>
+                                <p>Guessing: <span id="yourWordMasked" class="masked-word">_ _ _ _</span></p>
+                                <p>Words left: <span id="yourWordsLeft">5</span></p>
                                 <p>Letters tried: <span id="opponentGuessedLetters">-</span></p>
+                                <p class="running-score">This word: <span id="opponentRunningScore">+0 -0 = 0 pts</span></p>
                             </div>
                         </div>
                     </div>
@@ -106,7 +197,48 @@
                         <div class="keyboard">
                             <!-- Letters will be added by JavaScript -->
                         </div>
+                        <button id="iKnowBtn" class="btn know-word-btn hidden">I Know This Word!</button>
                         <div id="guessError" class="error hidden"></div>
+                    </div>
+
+                    <!-- Word Guess Modal -->
+                    <div id="wordGuessModal" class="modal hidden">
+                        <div class="modal-content small">
+                            <h3>I Know This Word!</h3>
+                            <p>Type the complete word you think it is:</p>
+                            <input type="text" id="wordGuessInput" placeholder="Enter the word..." autocomplete="off">
+                            <p class="warning">Warning: If you're wrong, you'll lose 2x the word's value!</p>
+                            <div class="modal-buttons">
+                                <button id="cancelGuessBtn" class="btn secondary">Cancel</button>
+                                <button id="submitGuessBtn" class="btn primary">Guess!</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Wrong Guess Modal -->
+                    <div id="wrongGuessModal" class="modal hidden">
+                        <div class="modal-content small wrong-guess-modal">
+                            <h3>Wrong Guess!</h3>
+                            <div class="wrong-guess-details">
+                                <p>You guessed: <span id="wrongGuessWord" class="wrong-word">WORD</span></p>
+                                <p>The word was: <span id="actualWord" class="actual-word">ACTUAL</span></p>
+                                <p class="penalty-display">Penalty: <span id="penaltyPoints" class="penalty-amount">-10</span> points</p>
+                            </div>
+                            <button id="wrongGuessOkBtn" class="btn primary">OK</button>
+                        </div>
+                    </div>
+
+                    <!-- Correct Guess Modal -->
+                    <div id="correctGuessModal" class="modal hidden">
+                        <div class="modal-content small correct-guess-modal">
+                            <h3>You Got It!</h3>
+                            <div class="correct-guess-details">
+                                <p class="congrats-emoji">🎉</p>
+                                <p>The word was: <span id="correctWord" class="correct-word">WORD</span></p>
+                                <p class="points-earned">+<span id="earnedPoints">10</span> points!</p>
+                            </div>
+                            <button id="correctGuessOkBtn" class="btn primary">Awesome!</button>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -116,6 +248,7 @@
         <div id="gameOverScreen" class="screen hidden">
             <div class="card">
                 <h2 id="gameOverTitle">Game Over!</h2>
+                <div id="finalScores" class="final-scores"></div>
                 <p id="gameOverMessage"></p>
                 <div id="finalWords" class="final-words"></div>
                 <button id="playAgainBtn" class="btn primary">Play Again!</button>

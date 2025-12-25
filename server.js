@@ -15,6 +15,20 @@ const io = new Server(server, {
 
 app.use(express.static(path.join(__dirname, 'public')));
 
+// Scrabble letter values
+const LETTER_VALUES = {
+    a: 1, b: 3, c: 3, d: 2, e: 1, f: 4, g: 2, h: 4, i: 1, j: 8, k: 5,
+    l: 1, m: 3, n: 1, o: 1, p: 3, q: 10, r: 1, s: 1, t: 1, u: 1, v: 4,
+    w: 4, x: 8, y: 4, z: 10
+};
+
+// Calculate word value using Scrabble points
+function getWordValue(word) {
+    return word.toLowerCase().split('').reduce((sum, letter) => {
+        return sum + (LETTER_VALUES[letter] || 0);
+    }, 0);
+}
+
 // Game state
 let gameRoom = null;
 
@@ -34,12 +48,10 @@ async function isValidWord(word) {
             } else {
                 resolve(false);
             }
-            // Consume response data to free up memory
             res.resume();
         }).on('error', (err) => {
             console.error('Dictionary API error:', err.message);
-            // On API error, accept the word (fail-open)
-            resolve(true);
+            resolve(true); // Fail-open on API error
         });
     });
 }
@@ -48,12 +60,35 @@ function createNewRoom(hostSocketId) {
     return {
         id: 'game-' + Date.now(),
         players: {
-            player1: { socketId: hostSocketId, name: null, word: null, guessesRemaining: 6, guessedLetters: [], won: null },
-            player2: { socketId: null, name: null, word: null, guessesRemaining: 6, guessedLetters: [], won: null }
+            player1: {
+                socketId: hostSocketId,
+                name: null,
+                pendingName: null,
+                words: [],           // Array of 5 secret words
+                wordsRemaining: [],  // Words not yet guessed by opponent
+                currentWord: null,   // Current word opponent is guessing
+                score: 0,
+                turnsTaken: 0,
+                guessedLetters: [],  // Letters guessed for current word
+                wrongGuesses: 0      // Wrong guesses for current word
+            },
+            player2: {
+                socketId: null,
+                name: null,
+                pendingName: null,
+                words: [],
+                wordsRemaining: [],
+                currentWord: null,
+                score: 0,
+                turnsTaken: 0,
+                guessedLetters: [],
+                wrongGuesses: 0
+            }
         },
         phase: 'waiting', // waiting, setup, playing, finished
         currentTurn: null,
-        messages: []
+        messages: [],
+        maxTurns: 10
     };
 }
 
@@ -83,93 +118,80 @@ function getMaskedWord(word, guessedLetters) {
     ).join(' ');
 }
 
-// Count how many unique letters a player still needs to guess to reveal opponent's word
-function getLettersRemaining(opponentWord, guessedLetters) {
-    const uniqueLetters = [...new Set(opponentWord.toLowerCase().split(''))];
-    return uniqueLetters.filter(letter => !guessedLetters.includes(letter)).length;
+function isWordFullyGuessed(word, guessedLetters) {
+    return word.toLowerCase().split('').every(letter =>
+        guessedLetters.includes(letter.toLowerCase())
+    );
 }
 
-function checkGameOver(room, currentPlayerKey) {
+// Pick a random word from remaining words
+function pickNextWord(player) {
+    if (player.wordsRemaining.length === 0) return null;
+    const randomIndex = Math.floor(Math.random() * player.wordsRemaining.length);
+    player.currentWord = player.wordsRemaining[randomIndex];
+    return player.currentWord;
+}
+
+// Calculate score for completing a word
+function calculateWordScore(word, wrongGuesses) {
+    const wordValue = getWordValue(word);
+    return (wordValue * 2) - wrongGuesses;
+}
+
+// Check if game should end
+function checkGameOver(room) {
     const p1 = room.players.player1;
     const p2 = room.players.player2;
 
-    // Check if player1 has guessed player2's word
-    const p2WordRevealed = p2.word.toLowerCase().split('').every(letter =>
-        p1.guessedLetters.includes(letter.toLowerCase())
-    );
+    // Check if both players have taken max turns
+    if (p1.turnsTaken >= room.maxTurns && p2.turnsTaken >= room.maxTurns) {
+        room.phase = 'finished';
+        return true;
+    }
 
-    // Check if player2 has guessed player1's word
-    const p1WordRevealed = p1.word.toLowerCase().split('').every(letter =>
-        p2.guessedLetters.includes(letter.toLowerCase())
-    );
+    // Check if one player has guessed all 5 words
+    const p1GuessedAll = p1.wordsRemaining.length === 0;
+    const p2GuessedAll = p2.wordsRemaining.length === 0;
 
-    // Mark winners
-    if (p2WordRevealed) p1.won = true;
-    if (p1WordRevealed) p2.won = true;
-
-    // Mark losers (ran out of guesses)
-    if (p1.guessesRemaining <= 0 && p1.won !== true) p1.won = false;
-    if (p2.guessesRemaining <= 0 && p2.won !== true) p2.won = false;
-
-    // Case 1: Player 1 just won on this turn (first to win)
-    // Player 2 gets a chance to tie ONLY if they have exactly 1 letter remaining
-    if (currentPlayerKey === 'player1' && p1.won === true && p2.won !== true) {
-        const p2LettersRemaining = getLettersRemaining(p1.word, p2.guessedLetters);
-        if (p2LettersRemaining > 1 || p2.guessesRemaining <= 0) {
-            // Player 2 has more than 1 letter remaining or no guesses left - game over, p1 wins
-            p2.won = false;
+    if (p1GuessedAll || p2GuessedAll) {
+        // Make sure both players have equal turns
+        if (p1.turnsTaken === p2.turnsTaken) {
             room.phase = 'finished';
             return true;
         }
-        // Player 2 has exactly 1 letter remaining - they get one more turn to try to tie
-        return false;
-    }
-
-    // Case 2: Player 2 just won on this turn
-    // If player 1 already won (p1.won === true), this is a tie - game over
-    // If player 1 hasn't won, player 2 wins outright - NO extra turn for player 1
-    if (currentPlayerKey === 'player2' && p2.won === true) {
-        if (p1.won !== true) {
-            p1.won = false;  // Player 2 wins, player 1 loses
-        }
-        // Either way (tie or p2 wins), game is over
-        room.phase = 'finished';
-        return true;
-    }
-
-    // Case 3: Player 2 just took their tie attempt but failed (player 1 already won previously)
-    if (currentPlayerKey === 'player2' && p1.won === true && p2.won !== true) {
-        p2.won = false;
-        room.phase = 'finished';
-        return true;
-    }
-
-    // Game is over if both players have finished (both won, both lost, or one of each)
-    if ((p1.won !== null) && (p2.won !== null)) {
-        room.phase = 'finished';
-        return true;
     }
 
     return false;
 }
 
+function getGameResult(room) {
+    const p1 = room.players.player1;
+    const p2 = room.players.player2;
+
+    if (p1.score > p2.score) {
+        return { winner: 'player1', tie: false };
+    } else if (p2.score > p1.score) {
+        return { winner: 'player2', tie: false };
+    } else {
+        return { winner: null, tie: true };
+    }
+}
+
 io.on('connection', (socket) => {
     console.log('Player connected:', socket.id);
 
-    // Create or join room
     socket.on('joinGame', (data) => {
         const playerName = data?.playerName || 'Player';
 
-        // Only allow Ashima or Anjali
         if (playerName !== 'Ashima' && playerName !== 'Anjali') {
             socket.emit('error', { message: 'Only Ashima and Anjali can play this game!' });
             return;
         }
 
         if (!gameRoom) {
-            // Create new room
             gameRoom = createNewRoom(socket.id);
             gameRoom.players.player1.pendingName = playerName;
+            gameRoom.players.player1.name = playerName;
             socket.join(gameRoom.id);
             const emoji = playerName === 'Ashima' ? '🌸' : '🦋';
             const sisterName = playerName === 'Ashima' ? 'Anjali' : 'Ashima';
@@ -180,28 +202,26 @@ io.on('connection', (socket) => {
                 message: `Waiting for ${sisterName}...`
             });
         } else if (!gameRoom.players.player2.socketId) {
-            // Check if same player is trying to join twice
             const existingPlayerName = gameRoom.players.player1.pendingName;
             if (existingPlayerName === playerName) {
                 socket.emit('error', { message: `${playerName} is already in the game! Ask your sister to join.` });
                 return;
             }
 
-            // Join existing room
             gameRoom.players.player2.socketId = socket.id;
             gameRoom.players.player2.pendingName = playerName;
+            gameRoom.players.player2.name = playerName;
             socket.join(gameRoom.id);
             gameRoom.phase = 'setup';
 
             const emoji = playerName === 'Ashima' ? '🌸' : '🦋';
-            addRefereeMessage(gameRoom, `${emoji} ${playerName} joined! Time to pick your secret words!`);
+            addRefereeMessage(gameRoom, `${emoji} ${playerName} joined! Time to pick your 5 secret words!`);
 
             io.to(gameRoom.id).emit('gameState', {
                 room: gameRoom,
-                message: "Both sisters are here! Pick your words!"
+                message: "Both sisters are here! Pick your 5 words!"
             });
 
-            // Send individual player info
             io.to(gameRoom.players.player1.socketId).emit('yourPlayer', 'player1');
             io.to(gameRoom.players.player2.socketId).emit('yourPlayer', 'player2');
         } else {
@@ -209,10 +229,10 @@ io.on('connection', (socket) => {
         }
     });
 
-    // Player submits name and word
-    socket.on('submitSetup', async ({ name, word }) => {
+    // Player submits their 5 words
+    socket.on('submitWords', async ({ words }) => {
         if (!gameRoom || gameRoom.phase !== 'setup') {
-            socket.emit('error', { message: 'Cannot submit setup at this time.' });
+            socket.emit('error', { message: 'Cannot submit words at this time.' });
             return;
         }
 
@@ -222,43 +242,67 @@ io.on('connection', (socket) => {
             return;
         }
 
-        // Validate name
-        if (!name || name.trim().length < 1) {
-            socket.emit('setupError', { message: 'Please enter a valid name.' });
+        const player = gameRoom.players[playerKey];
+
+        if (player.words.length > 0) {
+            socket.emit('setupError', { message: 'You have already submitted your words.' });
             return;
         }
 
-        // Validate word using Dictionary API
-        const normalizedWord = word.toLowerCase().trim();
-        const isValid = await isValidWord(normalizedWord);
-        if (!isValid) {
-            socket.emit('setupError', {
-                message: `"${word}" is not a valid English word. Please choose a real English word (3 or more letters).`
-            });
+        // Validate all 5 words
+        if (!words || words.length !== 5) {
+            socket.emit('setupError', { message: 'Please submit exactly 5 words.' });
             return;
         }
 
-        // Save player's setup
-        gameRoom.players[playerKey].name = name.trim();
-        gameRoom.players[playerKey].word = normalizedWord;
+        const validatedWords = [];
+        for (let i = 0; i < words.length; i++) {
+            const word = words[i].toLowerCase().trim();
+            if (!word || word.length < 3) {
+                socket.emit('setupError', { message: `Word ${i + 1} must be at least 3 letters.` });
+                return;
+            }
+            if (!/^[a-z]+$/.test(word)) {
+                socket.emit('setupError', { message: `Word ${i + 1} can only contain letters.` });
+                return;
+            }
+            const isValid = await isValidWord(word);
+            if (!isValid) {
+                socket.emit('setupError', { message: `"${words[i]}" is not a valid English word.` });
+                return;
+            }
+            if (validatedWords.includes(word)) {
+                socket.emit('setupError', { message: `Duplicate word: "${words[i]}". All words must be different.` });
+                return;
+            }
+            validatedWords.push(word);
+        }
 
-        addRefereeMessage(gameRoom, `${name} is ready!`);
+        player.words = validatedWords;
+        player.wordsRemaining = [...validatedWords];
+
+        addRefereeMessage(gameRoom, `${player.name} has submitted their 5 secret words!`);
 
         // Check if both players are ready
         const p1 = gameRoom.players.player1;
         const p2 = gameRoom.players.player2;
 
-        if (p1.name && p1.word && p2.name && p2.word) {
+        if (p1.words.length === 5 && p2.words.length === 5) {
             gameRoom.phase = 'playing';
             gameRoom.currentTurn = 'player1';
-            addRefereeMessage(gameRoom, `Both players are ready! ${p1.name} will try to guess ${p2.name}'s word. ${p2.name} will try to guess ${p1.name}'s word.`);
-            addRefereeMessage(gameRoom, `${p1.name}, it's your turn! Guess a letter.`);
+
+            // Pick first word for each player to guess
+            pickNextWord(p2); // p1 will guess p2's word
+            pickNextWord(p1); // p2 will guess p1's word
+
+            addRefereeMessage(gameRoom, `Both players are ready! ${p1.name} goes first!`);
+            addRefereeMessage(gameRoom, `${p1.name}, guess letters to reveal ${p2.name}'s word!`);
         }
 
         io.to(gameRoom.id).emit('gameState', { room: gameRoom });
     });
 
-    // Player makes a guess
+    // Player makes a letter guess
     socket.on('guess', ({ letter }) => {
         if (!gameRoom || gameRoom.phase !== 'playing') {
             socket.emit('error', { message: 'Cannot guess at this time.' });
@@ -280,7 +324,6 @@ io.on('connection', (socket) => {
         const opponentKey = getOpponent(playerKey);
         const opponent = gameRoom.players[opponentKey];
 
-        // Validate letter
         const normalizedLetter = letter.toLowerCase().trim();
         if (!/^[a-z]$/.test(normalizedLetter)) {
             socket.emit('guessError', { message: 'Please enter a single letter (a-z).' });
@@ -292,37 +335,54 @@ io.on('connection', (socket) => {
             return;
         }
 
-        // Record the guess
         player.guessedLetters.push(normalizedLetter);
+        player.turnsTaken++;
 
-        // Check if letter is in opponent's word
-        const wordToGuess = opponent.word;
-        const isCorrect = wordToGuess.includes(normalizedLetter);
+        const currentWord = opponent.currentWord;
+        const isCorrect = currentWord.includes(normalizedLetter);
 
         if (isCorrect) {
-            addRefereeMessage(gameRoom, `${player.name} guessed "${normalizedLetter.toUpperCase()}" - Correct!`);
+            addRefereeMessage(gameRoom, `${player.name} guessed "${normalizedLetter.toUpperCase()}" - Correct! (+${LETTER_VALUES[normalizedLetter]} points potential)`);
         } else {
-            player.guessesRemaining--;
-            addRefereeMessage(gameRoom, `${player.name} guessed "${normalizedLetter.toUpperCase()}" - Wrong! ${player.guessesRemaining} guesses remaining.`);
+            player.wrongGuesses++;
+            addRefereeMessage(gameRoom, `${player.name} guessed "${normalizedLetter.toUpperCase()}" - Wrong! (-1 point)`);
+        }
+
+        // Check if word is fully guessed
+        if (isWordFullyGuessed(currentWord, player.guessedLetters)) {
+            const wordScore = calculateWordScore(currentWord, player.wrongGuesses);
+            player.score += wordScore;
+            addRefereeMessage(gameRoom, `${player.name} guessed the word "${currentWord.toUpperCase()}"! +${wordScore} points!`);
+
+            // Remove word from opponent's remaining words
+            opponent.wordsRemaining = opponent.wordsRemaining.filter(w => w !== currentWord);
+
+            // Reset for next word
+            player.guessedLetters = [];
+            player.wrongGuesses = 0;
+
+            // Pick next word
+            if (opponent.wordsRemaining.length > 0) {
+                pickNextWord(opponent);
+                addRefereeMessage(gameRoom, `New word selected for ${player.name} to guess!`);
+            } else {
+                addRefereeMessage(gameRoom, `${player.name} has guessed all of ${opponent.name}'s words!`);
+            }
         }
 
         // Check if game is over
-        if (checkGameOver(gameRoom, playerKey)) {
-            let resultMessage = '';
+        if (checkGameOver(gameRoom)) {
+            const result = getGameResult(gameRoom);
             const p1 = gameRoom.players.player1;
             const p2 = gameRoom.players.player2;
 
-            if (p1.won && p2.won) {
-                resultMessage = `It's a tie! Both ${p1.name} and ${p2.name} guessed their words!`;
-            } else if (p1.won && !p2.won) {
-                resultMessage = `${p1.name} wins! They guessed "${p2.word}". ${p2.name}'s word was "${p1.word}".`;
-            } else if (!p1.won && p2.won) {
-                resultMessage = `${p2.name} wins! They guessed "${p1.word}". ${p1.name}'s word was "${p2.word}".`;
+            if (result.tie) {
+                addRefereeMessage(gameRoom, `Game Over! It's a tie! Both scored ${p1.score} points!`);
             } else {
-                resultMessage = `Game over! Neither player guessed their word. ${p1.name}'s word was "${p1.word}", ${p2.name}'s word was "${p2.word}".`;
+                const winner = gameRoom.players[result.winner];
+                const loser = gameRoom.players[getOpponent(result.winner)];
+                addRefereeMessage(gameRoom, `Game Over! ${winner.name} wins with ${winner.score} points! ${loser.name} scored ${loser.score} points.`);
             }
-
-            addRefereeMessage(gameRoom, resultMessage);
         } else {
             // Switch turns
             gameRoom.currentTurn = opponentKey;
@@ -332,7 +392,108 @@ io.on('connection', (socket) => {
         io.to(gameRoom.id).emit('gameState', { room: gameRoom });
     });
 
-    // Reset game
+    // "I Know This Word!" - guess the full word
+    socket.on('guessWord', ({ word }) => {
+        if (!gameRoom || gameRoom.phase !== 'playing') {
+            socket.emit('error', { message: 'Cannot guess at this time.' });
+            return;
+        }
+
+        const playerKey = getPlayerBySocketId(gameRoom, socket.id);
+        if (!playerKey) {
+            socket.emit('error', { message: 'You are not in this game.' });
+            return;
+        }
+
+        if (gameRoom.currentTurn !== playerKey) {
+            socket.emit('error', { message: "It's not your turn!" });
+            return;
+        }
+
+        const player = gameRoom.players[playerKey];
+        const opponentKey = getOpponent(playerKey);
+        const opponent = gameRoom.players[opponentKey];
+
+        const guessedWord = word.toLowerCase().trim();
+        const currentWord = opponent.currentWord;
+        const wordValue = getWordValue(currentWord);
+
+        player.turnsTaken++;
+
+        if (guessedWord === currentWord) {
+            // Correct! Award normal score
+            const wordScore = calculateWordScore(currentWord, player.wrongGuesses);
+            player.score += wordScore;
+            addRefereeMessage(gameRoom, `${player.name} knew the word! "${currentWord.toUpperCase()}" is correct! +${wordScore} points!`);
+
+            // Send correct guess modal to the player
+            socket.emit('correctWordGuess', {
+                word: currentWord,
+                points: wordScore
+            });
+
+            // Remove word from opponent's remaining words
+            opponent.wordsRemaining = opponent.wordsRemaining.filter(w => w !== currentWord);
+
+            // Reset for next word
+            player.guessedLetters = [];
+            player.wrongGuesses = 0;
+
+            if (opponent.wordsRemaining.length > 0) {
+                pickNextWord(opponent);
+                addRefereeMessage(gameRoom, `New word selected for ${player.name} to guess!`);
+            } else {
+                addRefereeMessage(gameRoom, `${player.name} has guessed all of ${opponent.name}'s words!`);
+            }
+        } else {
+            // Wrong! Apply penalty
+            const penalty = wordValue * 2;
+            player.score -= penalty;
+            addRefereeMessage(gameRoom, `${player.name} guessed "${guessedWord.toUpperCase()}" - WRONG! The word was "${currentWord.toUpperCase()}". -${penalty} points penalty!`);
+
+            // Send wrong guess modal to the player who guessed wrong
+            socket.emit('wrongWordGuess', {
+                guessed: guessedWord,
+                actual: currentWord,
+                penalty: penalty
+            });
+
+            // Remove word (deemed guessed even though wrong)
+            opponent.wordsRemaining = opponent.wordsRemaining.filter(w => w !== currentWord);
+
+            // Reset for next word
+            player.guessedLetters = [];
+            player.wrongGuesses = 0;
+
+            if (opponent.wordsRemaining.length > 0) {
+                pickNextWord(opponent);
+                addRefereeMessage(gameRoom, `New word selected for ${player.name} to guess!`);
+            } else {
+                addRefereeMessage(gameRoom, `No more words left for ${player.name} to guess.`);
+            }
+        }
+
+        // Check if game is over
+        if (checkGameOver(gameRoom)) {
+            const result = getGameResult(gameRoom);
+            const p1 = gameRoom.players.player1;
+            const p2 = gameRoom.players.player2;
+
+            if (result.tie) {
+                addRefereeMessage(gameRoom, `Game Over! It's a tie! Both scored ${p1.score} points!`);
+            } else {
+                const winner = gameRoom.players[result.winner];
+                const loser = gameRoom.players[getOpponent(result.winner)];
+                addRefereeMessage(gameRoom, `Game Over! ${winner.name} wins with ${winner.score} points! ${loser.name} scored ${loser.score} points.`);
+            }
+        } else {
+            gameRoom.currentTurn = opponentKey;
+            addRefereeMessage(gameRoom, `${opponent.name}, it's your turn!`);
+        }
+
+        io.to(gameRoom.id).emit('gameState', { room: gameRoom });
+    });
+
     socket.on('resetGame', () => {
         if (gameRoom) {
             const playerKey = getPlayerBySocketId(gameRoom, socket.id);
@@ -343,7 +504,6 @@ io.on('connection', (socket) => {
         }
     });
 
-    // Handle disconnect
     socket.on('disconnect', () => {
         console.log('Player disconnected:', socket.id);
         if (gameRoom) {
@@ -353,7 +513,6 @@ io.on('connection', (socket) => {
                 if (player.name) {
                     addRefereeMessage(gameRoom, `${player.name} has left the game.`);
                 }
-                // Reset the game if a player leaves
                 io.to(gameRoom.id).emit('playerLeft', {
                     message: 'Your opponent has left. The game will reset.'
                 });
@@ -365,5 +524,5 @@ io.on('connection', (socket) => {
 
 const PORT = process.env.PORT || 3001;
 server.listen(PORT, () => {
-    console.log(`Word Guess Game server running on http://localhost:${PORT}`);
+    console.log(`Word Guess Game v2 server running on http://localhost:${PORT}`);
 });
